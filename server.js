@@ -4,14 +4,22 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// Configuração do CORS aberta para evitar bloqueios entre Netlify e Render
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB conectado!'))
-  .catch(err => console.error(err));
+// Rota inicial de teste (Health Check) para garantir que o Render veja o app online
+app.get('/', (req, res) => {
+  res.send('Backend do Gestor de Tarefas rodando com sucesso!');
+});
 
-// Models
+// Modelos
 const UserSchema = new mongoose.Schema({
   name: String,
   email: { type: String, unique: true },
@@ -58,7 +66,7 @@ app.post('/api/register', async (req, res) => {
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: user._id, name, email } });
   } catch (err) {
-    res.status(400).json({ error: 'Email já cadastrado' });
+    res.status(400).json({ error: 'Email já cadastrado ou dados inválidos' });
   }
 });
 
@@ -71,11 +79,13 @@ app.post('/api/login', async (req, res) => {
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: user._id, name: user.name, email } });
   } catch (err) {
-    res.status(500).json({ error: 'Erro interno' });
+    // Retorna o erro real no console do backend para descobrirmos o problema
+    console.error("Erro no login:", err);
+    res.status(500).json({ error: 'Erro interno no servidor' });
   }
 });
 
-// Rotas de Tarefas (protegidas)
+// Rotas de Tarefas (protegidas e seguras por ID de usuário)
 app.get('/api/tasks', authMiddleware, async (req, res) => {
   const tasks = await Task.find({ userId: req.userId }).sort({ createdAt: -1 });
   res.json(tasks);
@@ -87,13 +97,26 @@ app.post('/api/tasks', authMiddleware, async (req, res) => {
 });
 
 app.put('/api/tasks/:id', authMiddleware, async (req, res) => {
-  const task = await Task.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  const task = await Task.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+  if (!task) return res.status(404).json({ error: 'Tarefa não encontrada ou não autorizada' });
   res.json(task);
 });
 
 app.delete('/api/tasks/:id', authMiddleware, async (req, res) => {
-  await Task.findByIdAndDelete(req.params.id);
-  res.json({ message: 'Deletado' });
+  const task = await Task.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+  if (!task) return res.status(404).json({ error: 'Tarefa não encontrada ou não autorizada' });
+  res.json({ message: 'Deletado com sucesso' });
 });
 
-app.listen(process.env.PORT, () => console.log(`Servidor rodando na porta ${process.env.PORT}`));
+// CONFIGURAÇÃO DE CONEXÃO RECOMENDADA:
+// O servidor só abre as portas se o banco de dados responder com sucesso!
+const PORT = process.env.PORT || 10000;
+
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log('✅ Conectado ao MongoDB com sucesso!');
+    app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+  })
+  .catch(err => {
+    console.error('❌ ERRO CRÍTICO AO CONECTAR NO MONGO:', err.message);
+  });
